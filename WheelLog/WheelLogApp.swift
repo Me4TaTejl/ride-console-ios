@@ -50,6 +50,7 @@ private struct ConsoleRoot: View {
     @ObservedObject var store: ConsoleStore
     @ObservedObject var samples: ConsoleSamples
     @Environment(\.scenePhase) private var phase
+    @AppStorage("keepDashboardAwake") private var keepDashboardAwake = true
     @State private var page = Page.instruments
     @State private var cover: Cover?
     @State private var events = [RideEvent]()
@@ -64,6 +65,9 @@ private struct ConsoleRoot: View {
             .onChange(of: wheel.showingLastReading) { _, _ in updateCamera(wheel.telemetry) }
             .onChange(of: wheel.strobe) { _, _ in updateIdleTimer() }
             .onChange(of: camera.recording) { _, _ in updateIdleTimer() }
+            .onChange(of: page) { _, _ in updateIdleTimer() }
+            .onChange(of: cover) { _, _ in updateIdleTimer() }
+            .onChange(of: keepDashboardAwake) { _, _ in updateIdleTimer() }
             .onChange(of: wheel.status) { _, value in addEvent(value) }
             .onChange(of: wheel.commandStatus) { _, value in if let value { addEvent(value) } }
             .onChange(of: route.started) { _, value in
@@ -167,7 +171,9 @@ private struct ConsoleRoot: View {
     }
 
     private func updateIdleTimer() {
-        UIApplication.shared.isIdleTimerDisabled = phase == .active && (camera.recording != .idle || wheel.strobe)
+        let dashboardIsVisible = keepDashboardAwake && page == .instruments && cover == nil
+        UIApplication.shared.isIdleTimerDisabled = phase == .active &&
+            (dashboardIsVisible || camera.recording != .idle || wheel.strobe)
     }
 }
 

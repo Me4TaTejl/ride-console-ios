@@ -35,6 +35,7 @@ struct ConsoleDashboard: View {
     let openGarage: () -> Void
 
     @State private var editor: TileEditSession?
+    @State private var details: TileEditSession?
     @State private var manage = false
 
     private var profile: String { store.profile(id: wheel.connectedID, demo: wheel.demo) }
@@ -51,8 +52,9 @@ struct ConsoleDashboard: View {
                     if let board {
                         boardSelector(board)
                         if board.tiles.isEmpty {
-                            Button("Добавить плитку", systemImage: "plus") { edit(nil, board: board) }
+                            Button("Добавить плитку", systemImage: "plus") { addTile(to: board) }
                                 .buttonStyle(.bordered)
+                                .disabled(board.locked == true)
                         }
                         ForEach(tileRows(board.tiles)) { row in
                             HStack(alignment: .top, spacing: 10) {
@@ -75,9 +77,9 @@ struct ConsoleDashboard: View {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button("Камера с телеметрией", systemImage: "video", action: camera)
                     Button("Добавить плитку", systemImage: "plus") {
-                        if let board { edit(nil, board: board) }
+                        if let board { addTile(to: board) }
                     }
-                    .disabled(board.map { $0.tiles.count >= 48 } ?? true)
+                    .disabled(board.map { $0.tiles.count >= 48 || $0.locked == true } ?? true)
                 }
             }
         }
@@ -85,6 +87,11 @@ struct ConsoleDashboard: View {
         .sheet(item: $editor) { session in
             ConsoleTileEditor(initial: session.tile, values: values, model: wheel.modelName,
                               isNew: session.isNew) { result in save(result, session: session) }
+        }
+        .sheet(item: $details) { session in
+            MetricDetails(initial: session.tile, wheel: wheel, route: route, samples: samples) { result in
+                save(result, session: session)
+            }
         }
         .sheet(isPresented: $manage) {
             if let board { BoardSettings(store: store, profile: profile, board: board) }
@@ -139,19 +146,35 @@ struct ConsoleDashboard: View {
                     .font(.subheadline.weight(.semibold))
             }
             Spacer()
+            Button(active.locked == true ? "Разблокировать плитки" : "Заблокировать плитки",
+                   systemImage: active.locked == true ? "lock.fill" : "lock.open") {
+                var next = active
+                next.locked = active.locked != true
+                store.update(next, profile: profile)
+            }
+            .labelStyle(.iconOnly)
+            .padding(.horizontal, 4)
             Button("Настройки панели", systemImage: "slider.horizontal.3") { manage = true }
                 .labelStyle(.iconOnly)
                 .padding(.horizontal, 4)
+                .disabled(active.locked == true)
         }
     }
 
     private func tileButton(_ tile: ConsoleTile, board: ConsoleBoard) -> some View {
-        Button { edit(tile, board: board) } label: {
-            ConsoleTileCard(tile: tile, values: values, series: samples.series,
-                            extrema: wheel.extrema, model: wheel.modelName)
+        let card = ConsoleTileCard(tile: tile, values: values, series: samples.series,
+                                   extrema: wheel.extrema, model: wheel.modelName)
+        return Group {
+            if board.locked == true {
+                card
+            } else {
+                Button {
+                    details = TileEditSession(profile: profile, boardID: board.id, tile: tile, isNew: false)
+                } label: { card }
+                .buttonStyle(.plain)
+                .accessibilityHint("Открывает подробные показания")
+            }
         }
-        .buttonStyle(.plain)
-        .accessibilityHint("Открывает настройки плитки")
     }
 
     private func tileRows(_ tiles: [ConsoleTile]) -> [TileRow] {
@@ -167,10 +190,10 @@ struct ConsoleDashboard: View {
         return rows
     }
 
-    private func edit(_ tile: ConsoleTile?, board: ConsoleBoard) {
+    private func addTile(to board: ConsoleBoard) {
         editor = TileEditSession(profile: profile, boardID: board.id,
-                                 tile: tile ?? .init(metrics: [.wheelSpeed], style: .number),
-                                 isNew: tile == nil)
+                                 tile: .init(metrics: [.wheelSpeed], style: .number),
+                                 isNew: true)
     }
 
     private func save(_ tile: ConsoleTile?, session: TileEditSession) {
@@ -334,6 +357,98 @@ private struct MetricSparkline: View {
             context.stroke(path, with: .color(color), style: .init(lineWidth: 1.5, lineJoin: .round))
         }
         .accessibilityHidden(true)
+    }
+}
+
+private struct MetricDetails: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var wheel: WheelConnection
+    @ObservedObject var route: RouteRecorder
+    @ObservedObject var samples: ConsoleSamples
+    let save: (ConsoleTile?) -> Void
+    @State private var tile: ConsoleTile
+    @State private var metric: ConsoleMetric
+    @State private var editing = false
+    @State private var removed = false
+
+    init(initial: ConsoleTile, wheel: WheelConnection, route: RouteRecorder,
+         samples: ConsoleSamples, save: @escaping (ConsoleTile?) -> Void) {
+        self.wheel = wheel
+        self.route = route
+        self.samples = samples
+        self.save = save
+        _tile = State(initialValue: initial)
+        _metric = State(initialValue: initial.metrics.first ?? .wheelSpeed)
+    }
+
+    private var values: [ConsoleMetric: Double] {
+        ConsoleMetric.readings(wheel.telemetry, fix: wheel.demo ? nil : route.fixForLog(at: .now))
+    }
+
+    var body: some View {
+        RideScreen(title: "Подробные показания", showsClose: true) {
+            if tile.metrics.count > 1 {
+                ScrollView(.horizontal) {
+                    HStack {
+                        ForEach(tile.metrics) { item in
+                            Button(item.title) { metric = item }
+                                .buttonStyle(.bordered)
+                                .tint(item == metric ? item.tint : RideColors.muted)
+                                .accessibilityAddTraits(item == metric ? .isSelected : [])
+                        }
+                    }
+                }
+                .scrollIndicators(.hidden)
+            }
+            RidePanel {
+                Text(metric.title).font(.headline)
+                Text("\(metric.reading(values[metric])) \(metric.unit)")
+                    .font(.system(.largeTitle, design: .monospaced))
+                    .foregroundStyle(metric.tint)
+                if wheel.showingLastReading {
+                    Label("Нет сигнала · последнее показание", systemImage: "exclamationmark.circle")
+                        .font(.caption).foregroundStyle(.red)
+                }
+            }
+            let history = samples.series[metric] ?? []
+            let present = history.compactMap { $0 }
+            RidePanel {
+                Text("Последние показания").font(.headline)
+                if present.isEmpty {
+                    Text("Данных пока нет").foregroundStyle(RideColors.muted)
+                } else {
+                    MetricSparkline(values: history, color: metric.tint)
+                        .frame(height: 130)
+                        .padding(.vertical, 8)
+                    HStack {
+                        statistic("Мин.", value: present.min())
+                        statistic("Среднее", value: present.reduce(0, +) / Double(present.count))
+                        statistic("Макс.", value: present.max())
+                    }
+                }
+            }
+            Button("Настройки плитки", systemImage: "slider.horizontal.3") { editing = true }
+                .buttonStyle(.borderedProminent)
+        }
+        .sheet(isPresented: $editing, onDismiss: { if removed { dismiss() } }) {
+            ConsoleTileEditor(initial: tile, values: values, model: wheel.modelName, isNew: false) { result in
+                save(result)
+                if let result {
+                    tile = result
+                    if !result.metrics.contains(metric), let first = result.metrics.first { metric = first }
+                } else {
+                    removed = true
+                }
+            }
+        }
+    }
+
+    private func statistic(_ title: String, value: Double?) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.caption).foregroundStyle(RideColors.muted)
+            Text(metric.reading(value)).monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

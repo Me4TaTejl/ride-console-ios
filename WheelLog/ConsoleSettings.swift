@@ -190,12 +190,14 @@ struct ConsoleSettings: View {
     @ObservedObject var wheel: WheelConnection
     @ObservedObject var library: RideLibrary
     let events: [RideEvent]
+    @AppStorage("keepDashboardAwake") private var keepDashboardAwake = true
     @State private var editingAlert: ConsoleAlert?
     @State private var showEvents = false
 
     var body: some View {
         RideScreen(title: "Настройки") {
             RidePanel {
+                Toggle("Держать экран приборов включённым", isOn: $keepDashboardAwake)
                 Toggle("Подключать последнее колесо", isOn: $store.settings.autoConnect)
                 Toggle("Начинать GPS-запись при подключении", isOn: $store.settings.automaticRide)
                 Button(library.logging ? "Завершить CSV" : "Записать CSV", systemImage: "doc.text") {

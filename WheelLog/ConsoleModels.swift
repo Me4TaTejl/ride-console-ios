@@ -124,6 +124,7 @@ struct ConsoleBoard: Codable, Identifiable, Equatable {
     var title: String
     var pinned: ConsoleMetric?
     var tiles: [ConsoleTile]
+    var locked: Bool? = nil
 
     static var standard: Self {
         Self(title: "Основной", pinned: .wheelSpeed, tiles: [
@@ -132,13 +133,6 @@ struct ConsoleBoard: Codable, Identifiable, Equatable {
             ConsoleTile(metrics: [.power], style: .number),
             ConsoleTile(metrics: [.pwm, .wheelSpeed], style: .chart, wide: true)
         ])
-    }
-
-    mutating func moveTile(_ from: UUID, before to: UUID) {
-        guard from != to, let source = tiles.firstIndex(where: { $0.id == from }),
-              let target = tiles.firstIndex(where: { $0.id == to }) else { return }
-        let item = tiles.remove(at: source)
-        tiles.insert(item, at: source < target ? target - 1 : target)
     }
 }
 
