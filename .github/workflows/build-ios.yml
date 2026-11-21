@@ -1,0 +1,102 @@
+name: Build Ride Console IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      preview:
+        description: Capture the dashboard in an iPhone 16 Plus simulator
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Test and build the BLE protocol framework
+        run: bash WheelCore/gradlew -p WheelCore jvmTest linkReleaseFrameworkIosArm64 --console=plain
+
+      - name: Check Sherman S, elevation, tile eligibility and alerts
+        run: |
+          xcodebuild -version
+          xcrun swiftc WheelLog/Telemetry.swift WheelLog/ShermanProtocol.swift WheelLog/RouteAscent.swift \
+            WheelLog/ConsoleModels.swift \
+            Tests/ShermanProtocolChecks.swift -o "$RUNNER_TEMP/sherman-checks"
+          "$RUNNER_TEMP/sherman-checks"
+
+      - name: Build for iPhone
+        run: |
+          xcodebuild build \
+            -project RideConsole.xcodeproj \
+            -scheme RideConsole \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/wheellog-build" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=
+
+      - name: Package unsigned IPA
+        run: |
+          app="$RUNNER_TEMP/wheellog-build/Build/Products/Release-iphoneos/RideConsole.app"
+          stage="$RUNNER_TEMP/wheellog-stage"
+          ipa="$RUNNER_TEMP/RideConsole.ipa"
+
+          test -x "$app/RideConsole"
+          xcrun lipo "$app/RideConsole" -verify_arch arm64
+          mkdir -p "$stage/Payload"
+          ditto "$app" "$stage/Payload/RideConsole.app"
+          ditto -c -k --keepParent "$stage/Payload" "$ipa"
+          unzip -tq "$ipa"
+
+      - name: Publish the workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: RideConsole-iOS
+          path: ${{ runner.temp }}/RideConsole.ipa
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Capture the dashboard on iPhone 16 Plus
+        if: inputs.preview
+        timeout-minutes: 6
+        run: |
+          bash WheelCore/gradlew -p WheelCore linkReleaseFrameworkIosSimulatorArm64 --console=plain
+          runtime=$(xcrun simctl list runtimes --json | python3 -c '
+          import json, sys
+          ios = [r for r in json.load(sys.stdin)["runtimes"]
+                 if r["isAvailable"] and r["name"].startswith("iOS ")]
+          print(max(ios, key=lambda r: tuple(map(int, r["version"].split("."))))["identifier"])
+          ')
+          device=$(xcrun simctl create RideConsolePreview com.apple.CoreSimulator.SimDeviceType.iPhone-16-Plus "$runtime")
+          xcrun simctl boot "$device"
+          xcodebuild build -project RideConsole.xcodeproj -scheme RideConsole -configuration Debug \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/wheellog-preview" CODE_SIGNING_ALLOWED=NO ARCHS=arm64 -quiet
+          app="$RUNNER_TEMP/wheellog-preview/Build/Products/Debug-iphonesimulator/RideConsole.app"
+          xcrun simctl bootstatus "$device" -b
+          xcrun simctl install "$device" "$app"
+          xcrun simctl launch "$device" local.rideconsole.ios --demo
+          sleep 4
+          xcrun simctl io "$device" screenshot "$RUNNER_TEMP/RideConsole-iPhone.png"
+
+      - name: Publish the dashboard preview
+        if: inputs.preview
+        uses: actions/upload-artifact@v7
+        with:
+          name: RideConsole-iPhone-preview
+          path: ${{ runner.temp }}/RideConsole-iPhone.png
+          if-no-files-found: error
+          retention-days: 14
