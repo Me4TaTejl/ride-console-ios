@@ -60,6 +60,16 @@ struct ShermanProtocolChecks {
         tile.setMetrics([.pwm, .battery, .controller])
         precondition(tile.style == .stack)
 
+        var board = ConsoleBoard.standard
+        let packing = TileGridPacking(tiles: board.tiles, columns: board.columns)
+        precondition(packing.rows == 5)
+        precondition(packing.cells.first == .init(row: 0, column: 0, width: 3, height: 2))
+        precondition(packing.cells.last == .init(row: 3, column: 2, width: 1, height: 2))
+        let first = board.tiles[0].id
+        let last = board.tiles[5].id
+        board.moveTile(first, to: last)
+        precondition(board.tiles.last?.id == first)
+
         var rule = ConsoleAlert()
         rule.enabled = true
         rule.hold = 2

@@ -201,10 +201,10 @@
 		B7330000000000000000000E /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {
 			ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 			CODE_SIGN_STYLE = Automatic;
-			CURRENT_PROJECT_VERSION = 2;
+			CURRENT_PROJECT_VERSION = 3;
 			GENERATE_INFOPLIST_FILE = NO;
 			INFOPLIST_FILE = WheelLog/Info.plist;
-			MARKETING_VERSION = 0.1.0;
+			MARKETING_VERSION = 0.1.1;
 			PRODUCT_BUNDLE_IDENTIFIER = local.rideconsole.ios;
 			PRODUCT_NAME = RideConsole;
 			SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -215,10 +215,10 @@
 		B7330000000000000000000F /* Release */ = {isa = XCBuildConfiguration; buildSettings = {
 			ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 			CODE_SIGN_STYLE = Automatic;
-			CURRENT_PROJECT_VERSION = 2;
+			CURRENT_PROJECT_VERSION = 3;
 			GENERATE_INFOPLIST_FILE = NO;
 			INFOPLIST_FILE = WheelLog/Info.plist;
-			MARKETING_VERSION = 0.1.0;
+			MARKETING_VERSION = 0.1.1;
 			PRODUCT_BUNDLE_IDENTIFIER = local.rideconsole.ios;
 			PRODUCT_NAME = RideConsole;
 			SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";

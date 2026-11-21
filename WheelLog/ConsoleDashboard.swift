@@ -37,6 +37,7 @@ struct ConsoleDashboard: View {
     @State private var editor: TileEditSession?
     @State private var details: TileEditSession?
     @State private var manage = false
+    @State private var arranging = false
 
     private var profile: String { store.profile(id: wheel.connectedID, demo: wheel.demo) }
     private var board: ConsoleBoard? { store.board(for: profile) }
@@ -47,7 +48,7 @@ struct ConsoleDashboard: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 10) {
                     header
                     if let board {
                         boardSelector(board)
@@ -56,17 +57,13 @@ struct ConsoleDashboard: View {
                                 .buttonStyle(.bordered)
                                 .disabled(board.locked == true)
                         }
-                        ForEach(tileRows(board.tiles)) { row in
-                            HStack(alignment: .top, spacing: 10) {
-                                ForEach(row.tiles) { tile in tileButton(tile, board: board) }
-                                if row.tiles.count == 1, !row.first.wide, row.first.style != .wheelLog {
-                                    Color.clear.frame(maxWidth: .infinity)
-                                }
-                            }
+                        TileGrid(columns: board.columns, packing: .init(tiles: board.tiles, columns: board.columns)) {
+                            ForEach(board.tiles) { tile in tileButton(tile, board: board) }
                         }
                     }
                 }
-                .padding(16)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
                 .frame(maxWidth: 640, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
@@ -84,12 +81,13 @@ struct ConsoleDashboard: View {
             }
         }
         .task(id: profile) { store.setupBoard(for: profile) }
+        .onChange(of: board?.id) { _, _ in arranging = false }
         .sheet(item: $editor) { session in
             ConsoleTileEditor(initial: session.tile, values: values, model: wheel.modelName,
-                              isNew: session.isNew) { result in save(result, session: session) }
+                              columns: session.columns, isNew: session.isNew) { result in save(result, session: session) }
         }
         .sheet(item: $details) { session in
-            MetricDetails(initial: session.tile, wheel: wheel, route: route, samples: samples) { result in
+            MetricDetails(initial: session.tile, columns: session.columns, wheel: wheel, route: route, samples: samples) { result in
                 save(result, session: session)
             }
         }
@@ -99,23 +97,25 @@ struct ConsoleDashboard: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Button(action: openGarage) {
-                HStack {
-                    Image(systemName: "circle.hexagongrid.fill")
-                        .font(.title3)
-                        .foregroundStyle(RideColors.accent)
-                    Text(wheel.modelName).font(.headline)
-                    Spacer()
-                    Image(systemName: "chevron.right").font(.caption.weight(.semibold))
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Button(action: openGarage) {
+                    Label(wheel.deviceName ?? wheel.modelName, systemImage: "circle.hexagongrid.fill")
+                        .font(.headline)
+                        .lineLimit(1)
                 }
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                Spacer(minLength: 4)
+                if let battery = values[.battery] {
+                    Label("\(ConsoleMetric.battery.reading(battery))%", systemImage: "battery.75percent")
+                        .font(.caption.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(battery >= 20 ? RideColors.accent : Color.orange)
+                }
             }
-            .buttonStyle(.plain)
             Label(wheel.showingLastReading ? "Нет сигнала · последние показания"
-                  : wheel.demo ? "Демонстрация" : wheel.status,
+                  : wheel.demo ? "Демо · Sherman S" : wheel.state == .live ? wheel.modelName + " · на связи" : wheel.status,
                   systemImage: wheel.showingLastReading ? "exclamationmark.circle" : "antenna.radiowaves.left.and.right")
-                .font(.subheadline)
+                .font(.caption)
                 .foregroundStyle(wheel.showingLastReading ? Color.red : RideColors.muted)
             if let metric = board?.pinned, let value = values[metric] {
                 Text("\(metric.title)  \(metric.reading(value)) \(metric.unit)")
@@ -126,7 +126,7 @@ struct ConsoleDashboard: View {
                 Label(message, systemImage: "bell.badge").font(.subheadline).foregroundStyle(.orange)
             }
         }
-        .padding(14)
+        .padding(10)
         .background(RideColors.surface, in: RoundedRectangle(cornerRadius: 16))
     }
 
@@ -139,17 +139,31 @@ struct ConsoleDashboard: View {
                     }
                 }
                 Button("Новая панель", systemImage: "plus") {
-                    store.addBoard(.init(title: "Моя панель", tiles: []), profile: profile)
+                    store.addBoard(.init(title: "Моя панель", tiles: [], columnCount: 3), profile: profile)
+                }
+                Button("Панель с компактными приборами", systemImage: "square.grid.3x3") {
+                    var next = ConsoleBoard.standard
+                    next.title = "Компактная"
+                    store.addBoard(next, profile: profile)
                 }
             } label: {
                 Label(active.title, systemImage: "rectangle.grid.2x2")
                     .font(.subheadline.weight(.semibold))
             }
             Spacer()
+            if active.locked != true, !active.tiles.isEmpty {
+                Button(arranging ? "Завершить раскладку" : "Изменить раскладку",
+                       systemImage: arranging ? "checkmark.circle.fill" : "square.grid.3x3") {
+                    withAnimation(.easeInOut(duration: 0.18)) { arranging.toggle() }
+                }
+                .labelStyle(.iconOnly)
+                .padding(.horizontal, 4)
+            }
             Button(active.locked == true ? "Разблокировать плитки" : "Заблокировать плитки",
                    systemImage: active.locked == true ? "lock.fill" : "lock.open") {
                 var next = active
                 next.locked = active.locked != true
+                arranging = false
                 store.update(next, profile: profile)
             }
             .labelStyle(.iconOnly)
@@ -165,11 +179,13 @@ struct ConsoleDashboard: View {
         let card = ConsoleTileCard(tile: tile, values: values, series: samples.series,
                                    extrema: wheel.extrema, model: wheel.modelName)
         return Group {
-            if board.locked == true {
+            if arranging {
+                arrangementTile(tile, board: board, card: card)
+            } else if board.locked == true {
                 card
             } else {
                 Button {
-                    details = TileEditSession(profile: profile, boardID: board.id, tile: tile, isNew: false)
+                    details = TileEditSession(profile: profile, boardID: board.id, columns: board.columns, tile: tile, isNew: false)
                 } label: { card }
                 .buttonStyle(.plain)
                 .accessibilityHint("Открывает подробные показания")
@@ -177,21 +193,49 @@ struct ConsoleDashboard: View {
         }
     }
 
-    private func tileRows(_ tiles: [ConsoleTile]) -> [TileRow] {
-        var rows = [TileRow]()
-        for tile in tiles {
-            if !tile.wide, tile.style != .wheelLog,
-               let last = rows.last, last.second == nil, !last.first.wide, last.first.style != .wheelLog {
-                rows[rows.count - 1].second = tile
-            } else {
-                rows.append(TileRow(first: tile))
+    private func arrangementTile(_ tile: ConsoleTile, board: ConsoleBoard, card: ConsoleTileCard) -> some View {
+        card
+            .overlay(alignment: .topLeading) {
+                Image(systemName: "line.3.horizontal")
+                    .frame(width: 40, height: 40)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                    .draggable(tile.id.uuidString)
+                    .accessibilityLabel("Переместить плитку")
             }
+            .overlay(alignment: .bottomTrailing) {
+                if tile.style != .wheelLog {
+                    Image(systemName: "arrow.down.right.and.arrow.up.left")
+                        .frame(width: 40, height: 40)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                        .gesture(DragGesture(minimumDistance: 12).onEnded { drag in
+                            resize(tile, board: board, offset: drag.translation)
+                        })
+                        .accessibilityLabel("Изменить размер плитки")
+                }
+            }
+            .dropDestination(for: String.self) { items, _ in
+                guard let text = items.first, let id = UUID(uuidString: text), id != tile.id,
+                      var current = store.board(for: profile), current.id == board.id,
+                      current.tiles.contains(where: { $0.id == id }) else { return false }
+                current.moveTile(id, to: tile.id)
+                withAnimation(.easeInOut(duration: 0.18)) { store.update(current, profile: profile) }
+                return true
+            }
+    }
+
+    private func resize(_ tile: ConsoleTile, board: ConsoleBoard, offset: CGSize) {
+        guard var current = store.board(for: profile), current.id == board.id,
+              let index = current.tiles.firstIndex(where: { $0.id == tile.id }) else { return }
+        let width = tile.width(in: board.columns) + Int((offset.width / 84).rounded())
+        let height = tile.height + Int((offset.height / 72).rounded())
+        current.tiles[index].resize(columns: width, rows: height, limit: board.columns)
+        if current.tiles[index] != tile {
+            withAnimation(.easeInOut(duration: 0.18)) { store.update(current, profile: profile) }
         }
-        return rows
     }
 
     private func addTile(to board: ConsoleBoard) {
-        editor = TileEditSession(profile: profile, boardID: board.id,
+        editor = TileEditSession(profile: profile, boardID: board.id, columns: board.columns,
                                  tile: .init(metrics: [.wheelSpeed], style: .number),
                                  isNew: true)
     }
@@ -207,17 +251,56 @@ struct ConsoleDashboard: View {
     }
 }
 
-private struct TileRow: Identifiable {
-    let first: ConsoleTile
-    var second: ConsoleTile?
-    var id: UUID { first.id }
-    var tiles: [ConsoleTile] { [first, second].compactMap { $0 } }
+private struct TileGrid: Layout {
+    let columns: Int
+    let packing: TileGridPacking
+    private let spacing: CGFloat = 8
+    private let minimumRowHeight: CGFloat = 66
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? 360
+        let dimensions = measure(width: width, subviews: subviews)
+        return CGSize(width: width, height: max(0, (dimensions.offsets.last ?? 0) - spacing))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let dimensions = measure(width: bounds.width, subviews: subviews)
+        for (cell, subview) in zip(packing.cells, subviews) {
+            let cellWidth = spanWidth(cell.width, columnWidth: dimensions.columnWidth)
+            let cellHeight = dimensions.offsets[cell.row + cell.height] - dimensions.offsets[cell.row] - spacing
+            subview.place(
+                at: CGPoint(x: bounds.minX + (dimensions.columnWidth + spacing) * CGFloat(cell.column),
+                            y: bounds.minY + dimensions.offsets[cell.row]),
+                anchor: .topLeading, proposal: ProposedViewSize(width: cellWidth, height: cellHeight)
+            )
+        }
+    }
+
+    private func measure(width: CGFloat, subviews: Subviews) -> (columnWidth: CGFloat, offsets: [CGFloat]) {
+        let columnWidth = max(1, (width - spacing * CGFloat(columns - 1)) / CGFloat(columns))
+        var heights = Array(repeating: minimumRowHeight, count: packing.rows)
+        for (cell, subview) in zip(packing.cells, subviews) {
+            let required = subview.sizeThatFits(
+                ProposedViewSize(width: spanWidth(cell.width, columnWidth: columnWidth), height: nil)
+            ).height
+            let perRow = (required - spacing * CGFloat(cell.height - 1)) / CGFloat(cell.height)
+            for index in cell.row..<(cell.row + cell.height) { heights[index] = max(heights[index], perRow) }
+        }
+        var offsets: [CGFloat] = [0]
+        for height in heights { offsets.append(offsets[offsets.count - 1] + height + spacing) }
+        return (columnWidth, offsets)
+    }
+
+    private func spanWidth(_ span: Int, columnWidth: CGFloat) -> CGFloat {
+        columnWidth * CGFloat(span) + spacing * CGFloat(span - 1)
+    }
 }
 
 private struct TileEditSession: Identifiable {
     let id = UUID()
     let profile: String
     let boardID: UUID
+    let columns: Int
     let tile: ConsoleTile
     let isNew: Bool
 }
@@ -234,11 +317,12 @@ struct ConsoleTileCard: View {
             if tile.style == .wheelLog {
                 classic
             } else {
-                VStack(alignment: .leading, spacing: 9) { content }
-                    .padding(14)
+                VStack(alignment: .leading, spacing: 7) { content }
+                    .padding(10)
+                    .frame(maxHeight: .infinity, alignment: .topLeading)
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 82, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: 66, alignment: .topLeading)
         .background(tile.style == .wheelLog ? ClassicDialColors.background : RideColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(RideColors.line).allowsHitTesting(false) }
@@ -268,19 +352,11 @@ struct ConsoleTileCard: View {
                     .accessibilityHidden(true)
             }
         case .gauge, .doubleGauge:
-            HStack(alignment: .top, spacing: 16) {
+            HStack(alignment: .top, spacing: 6) {
                 ForEach(tile.metrics) { metric in
-                    VStack(spacing: 8) {
-                        Gauge(value: fraction(metric)) {
-                            Text(metric.title).font(.caption).lineLimit(1)
-                        } currentValueLabel: {
-                            Text(metric.reading(values[metric])).font(.caption.monospacedDigit())
-                        }
-                        .gaugeStyle(.accessoryCircular)
-                        .tint(metric.tint)
-                        Text(metric.title).font(.caption).lineLimit(2)
-                    }
-                    .frame(maxWidth: .infinity)
+                    InstrumentDial(metric: metric, value: values[metric],
+                                   peak: metric == .wheelSpeed ? extrema.speed : metric == .pwm ? extrema.pwm : nil,
+                                   fraction: fraction(metric))
                 }
             }
         case .columns:
@@ -334,6 +410,43 @@ struct ConsoleTileCard: View {
     }
 }
 
+private struct InstrumentDial: View {
+    let metric: ConsoleMetric
+    let value: Double?
+    let peak: Double?
+    let fraction: Double
+
+    var body: some View {
+        VStack(spacing: 4) {
+            ZStack {
+                Circle().trim(from: 0, to: 0.72)
+                    .stroke(RideColors.line, style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                    .rotationEffect(.degrees(140))
+                Circle().trim(from: 0, to: 0.72 * fraction)
+                    .stroke(metric.tint, style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                    .rotationEffect(.degrees(140))
+                VStack(spacing: 1) {
+                    Text(metric.reading(value))
+                        .font(.system(.title, design: .monospaced).weight(.semibold))
+                        .foregroundStyle(metric.tint)
+                        .lineLimit(1).minimumScaleFactor(0.45)
+                    Text(metric.unit).font(.caption2).foregroundStyle(RideColors.muted)
+                }
+                .padding(.horizontal, 7)
+            }
+            .padding(4)
+            .aspectRatio(1, contentMode: .fit)
+            .frame(maxWidth: 102)
+            Text(metric.title).font(.caption2.weight(.medium)).lineLimit(1).minimumScaleFactor(0.75)
+            if let peak {
+                Text("Макс. \(metric.reading(peak))").font(.caption2.monospacedDigit()).foregroundStyle(RideColors.muted)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
+    }
+}
+
 private struct MetricSparkline: View {
     let values: [Double?]
     let color: Color
@@ -366,17 +479,19 @@ private struct MetricDetails: View {
     @ObservedObject var route: RouteRecorder
     @ObservedObject var samples: ConsoleSamples
     let save: (ConsoleTile?) -> Void
+    let columns: Int
     @State private var tile: ConsoleTile
     @State private var metric: ConsoleMetric
     @State private var editing = false
     @State private var removed = false
 
-    init(initial: ConsoleTile, wheel: WheelConnection, route: RouteRecorder,
+    init(initial: ConsoleTile, columns: Int, wheel: WheelConnection, route: RouteRecorder,
          samples: ConsoleSamples, save: @escaping (ConsoleTile?) -> Void) {
         self.wheel = wheel
         self.route = route
         self.samples = samples
         self.save = save
+        self.columns = columns
         _tile = State(initialValue: initial)
         _metric = State(initialValue: initial.metrics.first ?? .wheelSpeed)
     }
@@ -431,7 +546,7 @@ private struct MetricDetails: View {
                 .buttonStyle(.borderedProminent)
         }
         .sheet(isPresented: $editing, onDismiss: { if removed { dismiss() } }) {
-            ConsoleTileEditor(initial: tile, values: values, model: wheel.modelName, isNew: false) { result in
+            ConsoleTileEditor(initial: tile, values: values, model: wheel.modelName, columns: columns, isNew: false) { result in
                 save(result)
                 if let result {
                     tile = result
@@ -457,14 +572,16 @@ private struct ConsoleTileEditor: View {
     @State private var tile: ConsoleTile
     let values: [ConsoleMetric: Double]
     let model: String
+    let columns: Int
     let isNew: Bool
     let save: (ConsoleTile?) -> Void
 
     init(initial: ConsoleTile, values: [ConsoleMetric: Double], model: String,
-         isNew: Bool, save: @escaping (ConsoleTile?) -> Void) {
+         columns: Int, isNew: Bool, save: @escaping (ConsoleTile?) -> Void) {
         _tile = State(initialValue: initial)
         self.values = values
         self.model = model
+        self.columns = columns
         self.isNew = isNew
         self.save = save
     }
@@ -476,23 +593,40 @@ private struct ConsoleTileEditor: View {
                     ConsoleTileCard(tile: tile, values: values, model: model)
                         .listRowInsets(EdgeInsets())
                 }
-                Section("Оформление") {
-                    ForEach(TileStyle.allCases) { style in styleRow(style) }
-                    if !TileStyle.wheelLog.supports(tile.metrics) {
-                        Text("Для WheelLog выберите PWM, заряд, температуру контроллера и скорость колеса.")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    }
-                    Toggle("На всю ширину", isOn: $tile.wide).disabled(tile.style == .wheelLog)
-                }
                 Section("Метрики") {
                     ForEach(ConsoleMetric.allCases) { metric in
-                        Toggle(metric.title, isOn: Binding(
+                        Toggle(isOn: Binding(
                             get: { tile.metrics.contains(metric) },
                             set: { selected in
                                 tile.setMetrics(selected ? tile.metrics + [metric] : tile.metrics.filter { $0 != metric })
                             }
-                        ))
+                        )) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(metric.title)
+                                Text("\(metric.reading(values[metric])) \(metric.unit)")
+                                    .font(.caption.monospacedDigit()).foregroundStyle(metric.tint)
+                            }
+                        }
                         .disabled(!tile.metrics.contains(metric) && tile.metrics.count >= 6)
+                    }
+                }
+                Section("Оформление") {
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                        ForEach(TileStyle.allCases) { style in styleCard(style) }
+                    }
+                    if !TileStyle.wheelLog.supports(tile.metrics) {
+                        Text("Для WheelLog выберите PWM, заряд, температуру контроллера и скорость колеса.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    if tile.style != .wheelLog {
+                        Stepper("Ширина · \(tile.width(in: columns))", value: Binding(
+                            get: { tile.width(in: columns) },
+                            set: { tile.resize(columns: $0, rows: tile.height, limit: columns) }
+                        ), in: 1...columns)
+                        Stepper("Высота · \(tile.height)", value: Binding(
+                            get: { tile.height },
+                            set: { tile.resize(columns: tile.width(in: columns), rows: $0, limit: columns) }
+                        ), in: 1...3)
                     }
                 }
                 if !isNew {
@@ -512,18 +646,20 @@ private struct ConsoleTileEditor: View {
         }
     }
 
-    private func styleRow(_ style: TileStyle) -> some View {
+    private func styleCard(_ style: TileStyle) -> some View {
         Button {
             tile.style = style
-            if style == .wheelLog { tile.wide = true }
         } label: {
-            HStack {
-                Label(style.title, systemImage: style.icon)
-                Spacer()
-                if tile.style == style { Image(systemName: "checkmark") }
+            VStack(spacing: 5) {
+                Image(systemName: style.icon).font(.title3)
+                Text(style.title).font(.caption.weight(.medium)).lineLimit(2)
             }
-            .contentShape(Rectangle())
+            .frame(maxWidth: .infinity, minHeight: 62)
+            .background(tile.style == style ? RideColors.accent.opacity(0.17) : RideColors.surface,
+                        in: RoundedRectangle(cornerRadius: 10))
+            .foregroundStyle(style.supports(tile.metrics) ? RideColors.instrument : RideColors.muted.opacity(0.5))
         }
+        .buttonStyle(.plain)
         .disabled(!style.supports(tile.metrics))
         .accessibilityAddTraits(tile.style == style ? .isSelected : [])
     }

@@ -111,6 +111,22 @@ struct ConsoleTile: Codable, Identifiable, Equatable {
     var metrics: [ConsoleMetric]
     var style: TileStyle
     var wide = false
+    var columnSpan: Int? = nil
+    var rowSpan: Int? = nil
+
+    func width(in columns: Int) -> Int {
+        if style == .wheelLog { return columns }
+        return min(columns, max(1, columnSpan ?? (wide ? columns : 1)))
+    }
+
+    var height: Int { style == .wheelLog ? 1 : min(3, max(1, rowSpan ?? 1)) }
+
+    mutating func resize(columns: Int, rows: Int, limit: Int) {
+        guard style != .wheelLog else { return }
+        columnSpan = min(limit, max(1, columns))
+        rowSpan = min(3, max(1, rows))
+        wide = columnSpan == limit
+    }
 
     mutating func setMetrics(_ metrics: [ConsoleMetric]) {
         var seen = Set<ConsoleMetric>()
@@ -125,14 +141,72 @@ struct ConsoleBoard: Codable, Identifiable, Equatable {
     var pinned: ConsoleMetric?
     var tiles: [ConsoleTile]
     var locked: Bool? = nil
+    var columnCount: Int? = nil
+    var columns: Int { columnCount == 3 ? 3 : 2 }
 
     static var standard: Self {
-        Self(title: "Основной", pinned: .wheelSpeed, tiles: [
-            ConsoleTile(metrics: TileStyle.wheelLogMetrics, style: .wheelLog, wide: true),
+        Self(title: "Основной", pinned: nil, tiles: [
+            ConsoleTile(metrics: [.wheelSpeed, .pwm], style: .doubleGauge, wide: true, rowSpan: 2),
+            ConsoleTile(metrics: [.battery], style: .bar),
             ConsoleTile(metrics: [.voltage], style: .number),
-            ConsoleTile(metrics: [.power], style: .number),
-            ConsoleTile(metrics: [.pwm, .wheelSpeed], style: .chart, wide: true)
-        ])
+            ConsoleTile(metrics: [.controller], style: .number),
+            ConsoleTile(metrics: [.power, .current], style: .chart, columnSpan: 2, rowSpan: 2),
+            ConsoleTile(metrics: [.phaseCurrent, .trip, .odometer], style: .stack, rowSpan: 2)
+        ], columnCount: 3)
+    }
+
+    mutating func moveTile(_ id: UUID, to destination: UUID) {
+        guard id != destination, let source = tiles.firstIndex(where: { $0.id == id }),
+              let target = tiles.firstIndex(where: { $0.id == destination }) else { return }
+        let tile = tiles.remove(at: source)
+        tiles.insert(tile, at: target)
+    }
+}
+
+struct TileGridPacking {
+    struct Cell: Equatable {
+        let row: Int
+        let column: Int
+        let width: Int
+        let height: Int
+    }
+
+    let cells: [Cell]
+    let rows: Int
+
+    init(tiles: [ConsoleTile], columns: Int) {
+        var occupied = [[Bool]]()
+        var position = 0
+        var cells = [Cell]()
+        for tile in tiles {
+            let width = tile.width(in: columns)
+            let height = tile.height
+            while true {
+                let row = position / columns
+                let column = position % columns
+                if column + width > columns {
+                    position = (row + 1) * columns
+                    continue
+                }
+                while occupied.count < row + height {
+                    occupied.append(Array(repeating: false, count: columns))
+                }
+                let free = (row..<(row + height)).allSatisfy { index in
+                    !occupied[index][column..<(column + width)].contains(true)
+                }
+                if free {
+                    for index in row..<(row + height) {
+                        for lane in column..<(column + width) { occupied[index][lane] = true }
+                    }
+                    cells.append(Cell(row: row, column: column, width: width, height: height))
+                    position += width
+                    break
+                }
+                position += 1
+            }
+        }
+        self.cells = cells
+        rows = occupied.count
     }
 }
 

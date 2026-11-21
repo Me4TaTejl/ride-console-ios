@@ -22,10 +22,11 @@ struct Telemetry: Codable, Equatable {
 
     static func demo(at seconds: Double) -> Self {
         let speed = 28 + sin(seconds / 2.9) * 14 + sin(seconds * 1.2) * 2
-        let amps = 11 + sin(seconds / 1.53) * 9
-        return Self(speed: speed, pwm: 19 + speed * 1.03, power: amps * 121.8,
-                    voltage: 121.8, current: amps, phaseCurrent: amps * 2.4,
-                    battery: 83, temperature: 37 + sin(seconds / 8) * 2,
+        let amps = 7 + sin(seconds / 1.53) * 12
+        let volts = 95.1 - amps * 0.065
+        return Self(speed: speed, pwm: 19 + speed * 1.03, power: amps * volts,
+                    voltage: volts, current: amps, phaseCurrent: amps * 2.4,
+                    battery: 81 + sin(seconds / 13) * 2, temperature: 37 + sin(seconds / 8) * 2,
                     trip: seconds * 0.008, odometer: 612.4 + seconds * 0.008)
     }
 }
